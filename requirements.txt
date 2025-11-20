@@ -1,6 +1,6 @@
 python-telegram-bot==13.14
 requests==2.32.5
 beautifulsoup4==4.14.2
-lxml==4.9.3
+html5lib==1.1
 urllib3==1.26.16
 wheel
