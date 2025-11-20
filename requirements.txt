@@ -1,7 +1,4 @@
 python-telegram-bot==13.14
-requests
-beautifulsoup4
-lxml
-Pillow
-urllib3==1.26.16
-certifi
+requests>=2.28
+beautifulsoup4>=4.11
+lxml>=4.9
