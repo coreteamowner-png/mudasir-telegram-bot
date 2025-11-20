@@ -3,3 +3,5 @@ requests
 beautifulsoup4
 lxml
 Pillow
+urllib3==1.26.16
+certifi

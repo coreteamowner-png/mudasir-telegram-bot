@@ -1,79 +1,78 @@
 #!/usr/bin/env python3
-# MuDaSiR VIP Allocator Bot - full featured (Heroku/GitHub/Termux ready)
-# DO NOT share BOT_TOKEN or LOGIN_FORM_RAW publicly.
+# MuDaSiR Allocator Bot - stable version
+# Set BOT_TOKEN and LOGIN_FORM_RAW in Heroku Config Vars
 
-import os, re, time, logging, sqlite3
-from time import sleep
+import os, re, logging, sqlite3, time
 from urllib.parse import unquote
+from time import sleep
+
 import requests
 from bs4 import BeautifulSoup
-from telegram import (
-    Update, ParseMode, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-)
-from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
-)
 
-# ---------------- CONFIG (set these as ENV vars on Heroku or export in Termux) ---------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")            # REQUIRED
-LOGIN_FORM_RAW = os.getenv("LOGIN_FORM_RAW", "")  # e.g. user=7944&password=10-16-2025%40Swi
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
+
+# --- config from env ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+LOGIN_FORM_RAW = os.getenv("LOGIN_FORM_RAW", "")
 UPSTREAM_BASE = os.getenv("UPSTREAM_BASE", "http://mysmsportal.com")
 LOGIN_PATH = "/index.php?login=1"
 ALL_PATH = "/index.php?opt=shw_all_v2"
 TODAY_PATH = "/index.php?opt=shw_sts_today"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (MuDaSiR Bot)",
+    "User-Agent": "MuDaSiRBot/1.0",
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": UPSTREAM_BASE,
 }
 
-# ---------------- logging ----------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- logging ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mudasir")
 
-# ---------------- sqlite history ----------------
+# --- sqlite history ---
 DBFILE = "mudasir_history.db"
 conn = sqlite3.connect(DBFILE, check_same_thread=False)
 cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS history (
+cur.execute("""CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     client_external_id TEXT,
     range_code TEXT,
     quantity INTEGER,
     status TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
+)""")
 conn.commit()
 
 def save_history(client_id, selrng, qty, status):
-    cur.execute("INSERT INTO history (client_external_id, range_code, quantity, status) VALUES (?,?,?,?)",
-                (client_id, selrng, qty, status))
-    conn.commit()
+    try:
+        cur.execute("INSERT INTO history (client_external_id, range_code, quantity, status) VALUES (?,?,?,?)",
+                    (client_id, selrng, qty, str(status)))
+        conn.commit()
+    except Exception as e:
+        log.warning("save_history failed: %s", e)
 
-# ---------------- helpers ----------------
+# --- helpers ---
 def parse_form(raw):
     parts = [p for p in raw.split("&") if "=" in p]
     return {k: unquote(v) for k,v in (p.split("=",1) for p in parts)}
 
 def get_session():
     s = requests.Session()
-    if not LOGIN_FORM_RAW.strip():
-        return s
-    try:
-        data = parse_form(LOGIN_FORM_RAW)
-        s.post(UPSTREAM_BASE + LOGIN_PATH, data=data, headers=HEADERS, timeout=15, allow_redirects=True)
-    except Exception as e:
-        log.warning("Login attempt failed: %s", e)
+    if LOGIN_FORM_RAW.strip():
+        try:
+            data = parse_form(LOGIN_FORM_RAW)
+            s.post(UPSTREAM_BASE + LOGIN_PATH, data=data, headers=HEADERS, timeout=15, allow_redirects=True)
+            log.info("Attempted upstream login (LOGIN_FORM_RAW provided).")
+        except Exception as e:
+            log.warning("Upstream login attempt failed: %s", e)
     return s
 
 def looks_like_html(txt):
     if not txt: return False
     return bool(re.search(r'<!doctype|<html|<head', txt, re.I))
 
-# ---------------- parsers ----------------
+# --- parsers ---
 def extract_clients(html):
     soup = BeautifulSoup(html, "lxml")
     out = []
@@ -88,22 +87,20 @@ def parse_ranges(html):
     rows = []
     for tr in soup.select("table tr"):
         tds = tr.find_all("td")
-        if len(tds) < 1:
-            continue
+        if len(tds) < 1: continue
         rng_text = tds[0].get_text(" ", strip=True)
-        if not rng_text:
-            continue
+        if not rng_text: continue
         hidden = tr.find("input", {"name": "selrng"})
         selrng = hidden.get("value") if hidden and hidden.get("value") else ""
         rows.append({"text": rng_text, "selrng": selrng})
     return rows
 
-# ---------------- bot UI helpers ----------------
+# --- UI ---
 BRAND_HEADER = "💠 *MuDaSiR VIP Allocator*  \n_Powered by MuDaSiR_\n\n"
-def reply_brand_html(text):
+def brand(text):
     return BRAND_HEADER + text
 
-def main_menu_keyboard():
+def main_menu_kb():
     kb = [
         [InlineKeyboardButton("📋 Clients", callback_data="menu_clients"),
          InlineKeyboardButton("📊 Today Stats", callback_data="menu_today")],
@@ -114,12 +111,12 @@ def main_menu_keyboard():
     ]
     return InlineKeyboardMarkup(kb)
 
-# ---------------- handlers ----------------
+# --- handlers ---
 def start(update: Update, context: CallbackContext):
     txt = ("*Welcome to MuDaSiR VIP Allocator*\n\n"
            "Use the menu below or /clients /today /history /allocate\n\n"
-           "❤️ *Love from MuDaSiR*")
-    update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_keyboard())
+           "— *Love ❤ from MuDaSiR*")
+    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
 
 def help_cmd(update: Update, context: CallbackContext):
     txt = ("*Commands*\n"
@@ -127,10 +124,9 @@ def help_cmd(update: Update, context: CallbackContext):
            "/ranges <client_id> - show ranges\n"
            "/allocate <client_id> <selrng> <qty> - allocate\n"
            "/today - today stats\n"
-           "Send CSV file (client_external_id,selrng,quantity) to bulk allocate\n")
-    update.message.reply_text(reply_brand_html(txt), parse_mode=ParseMode.MARKDOWN)
+           "Upload CSV (client_external_id,selrng,quantity) for bulk run\n")
+    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN)
 
-# clients
 def clients_cmd(update: Update, context: CallbackContext):
     s = get_session()
     try:
@@ -138,7 +134,7 @@ def clients_cmd(update: Update, context: CallbackContext):
     except Exception as e:
         update.message.reply_text("⚠️ Network error: " + str(e)); return
     if looks_like_html(r.text) and "login" in r.text.lower():
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Set LOGIN_FORM_RAW env var.") ; return
+        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     try:
         cl = extract_clients(r.text)
         if not cl:
@@ -146,12 +142,11 @@ def clients_cmd(update: Update, context: CallbackContext):
             return
         msg = "*Clients*\n\n"
         for c in cl:
-            msg += f"• *{c['name']}*   —   `{c['external_id']}`\n"
-        update.message.reply_text(reply_brand_html(msg), parse_mode=ParseMode.MARKDOWN)
+            msg += f"• *{c['name']}* — `{c['external_id']}`\n"
+        update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         update.message.reply_text("Parse error: " + str(e))
 
-# ranges
 def ranges_cmd(update: Update, context: CallbackContext):
     args = context.args
     if not args:
@@ -163,7 +158,7 @@ def ranges_cmd(update: Update, context: CallbackContext):
     except Exception as e:
         update.message.reply_text("Network error: " + str(e)); return
     if looks_like_html(r.text) and "login" in r.text.lower():
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Set LOGIN_FORM_RAW env var."); return
+        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     rows = parse_ranges(r.text)
     if not rows:
         update.message.reply_text("No ranges found.")
@@ -172,9 +167,8 @@ def ranges_cmd(update: Update, context: CallbackContext):
     for rrr in rows:
         sel = rrr['selrng'] or "(no selrng)"
         msg += f"• *{rrr['text']}* — `{sel}`\n"
-    update.message.reply_text(reply_brand_html(msg), parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
 
-# allocate single
 def allocate_cmd(update: Update, context: CallbackContext):
     args = context.args
     if len(args) < 3:
@@ -190,19 +184,17 @@ def allocate_cmd(update: Update, context: CallbackContext):
     except Exception as e:
         update.message.reply_text("Network error: "+str(e)); return
     if looks_like_html(r.text):
-        update.message.reply_text("⚠️ Upstream returned HTML (login required or error). Check LOGIN_FORM_RAW."); return
-    status = "success" if r.status_code==200 else "failed"
+        update.message.reply_text("⚠️ Upstream returned HTML (login required or error). Check LOGIN_FORM_RAW."); 
+        save_history(selidd, selrng, qty, "failed_html")
+        return
+    status = "success" if r.status_code==200 else f"failed_http_{r.status_code}"
     save_history(selidd, selrng, qty, status)
-    # stylized success message (MuDaSiR branding)
     if status=="success":
-        txt = (f"✅ *Numbers Allocated Successful*\n\n"
-               f"Client: `{selidd}`\nRange: `{selrng}`\nQty: *{qty}*\n\n"
-               "— *Love ❤ from MuDaSiR*")
+        txt = (f"✅ *Numbers Allocated Successful*\n\nClient: `{selidd}`\nRange: `{selrng}`\nQty: *{qty}*\n\n— *Love ❤ from MuDaSiR*")
     else:
         txt = f"❌ Failed: HTTP {r.status_code}"
-    update.message.reply_text(reply_brand_html(txt), parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN)
 
-# today stats
 def today_cmd(update: Update, context: CallbackContext):
     s = get_session()
     try:
@@ -210,7 +202,7 @@ def today_cmd(update: Update, context: CallbackContext):
     except Exception as e:
         update.message.reply_text("Network error: " + str(e)); return
     if looks_like_html(r.text):
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Set LOGIN_FORM_RAW."); return
+        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     soup = BeautifulSoup(r.text, "lxml")
     tbl = soup.find("table")
     if not tbl:
@@ -220,15 +212,17 @@ def today_cmd(update: Update, context: CallbackContext):
         tds = tr.find_all("td")
         if len(tds) < 3: continue
         client = tds[0].get_text(" ", strip=True)
-        tbp = int(re.sub(r"[^\d]", "", tds[1].get_text(" ", strip=True) or "0") or 0)
-        ntb = int(re.sub(r"[^\d]", "", tds[2].get_text(" ", strip=True) or "0") or 0)
+        try:
+            tbp = int(re.sub(r"[^\d]", "", tds[1].get_text(" ", strip=True) or "0") or 0)
+            ntb = int(re.sub(r"[^\d]", "", tds[2].get_text(" ", strip=True) or "0") or 0)
+        except:
+            tbp = ntb = 0
         counts[client] = (tbp, ntb)
     msg = "*Today stats*\n\n"
     for k,v in counts.items():
         msg += f"• *{k}* — TBP: `{v[0]}`  NTB: `{v[1]}`\n"
-    update.message.reply_text(reply_brand_html(msg), parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
 
-# history
 def history_cmd(update: Update, context: CallbackContext):
     rows = cur.execute("SELECT client_external_id,range_code,quantity,status,created_at FROM history ORDER BY id DESC LIMIT 50").fetchall()
     if not rows:
@@ -236,9 +230,8 @@ def history_cmd(update: Update, context: CallbackContext):
     msg = "*Allocation History (last 50)*\n\n"
     for r in rows:
         msg += f"{r[4]} — `{r[0]}` — {r[1]} — {r[2]} — {r[3]}\n"
-    update.message.reply_text(reply_brand_html(msg), parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
 
-# handle CSV upload as document
 def handle_document(update: Update, context: CallbackContext):
     doc = update.message.document
     if not doc:
@@ -279,7 +272,6 @@ def handle_document(update: Update, context: CallbackContext):
             sleep(0.25)
     update.message.reply_text(f"CSV processed: total={processed}, success={success}, failed={failed}")
 
-# inline menu callbacks
 def menu_callback(update: Update, context: CallbackContext):
     q = update.callback_query
     q.answer()
@@ -293,10 +285,8 @@ def menu_callback(update: Update, context: CallbackContext):
     elif data == "menu_csv":
         q.message.reply_text("Send CSV file (client_external_id,selrng,quantity) as attachment.")
     elif data == "menu_advanced":
-        txt = ("*Advanced*\n"
-               "Use /ranges <client_id> to see ranges\n"
-               "Use /allocate <client_id> <selrng> <qty> to allocate\n")
-        q.message.reply_text(reply_brand_html(txt), parse_mode=ParseMode.MARKDOWN)
+        txt = ("*Advanced*\nUse /ranges <client_id> and /allocate <client_id> <selrng> <qty>")
+        q.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_help":
         help_cmd(update, context)
     else:
@@ -305,15 +295,18 @@ def menu_callback(update: Update, context: CallbackContext):
 def unknown(update: Update, context: CallbackContext):
     update.message.reply_text("Unknown command. Use /help or the menu.")
 
-# ---------------- main ----------------
 def main():
+    log.info("Starting MuDaSiR Bot...")
     if not BOT_TOKEN:
-        print("ERROR: BOT_TOKEN env var not set")
+        log.error("BOT_TOKEN not set. Exiting.")
         return
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    try:
+        updater = Updater(BOT_TOKEN, use_context=True)
+    except Exception as e:
+        log.exception("Failed to create Updater: %s", e)
+        return
 
-    # commands
+    dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_cmd))
     dp.add_handler(CommandHandler("clients", clients_cmd))
@@ -321,19 +314,16 @@ def main():
     dp.add_handler(CommandHandler("allocate", allocate_cmd))
     dp.add_handler(CommandHandler("today", today_cmd))
     dp.add_handler(CommandHandler("history", history_cmd))
-
-    # document (CSV)
     dp.add_handler(MessageHandler(Filters.document, handle_document))
-
-    # inline menu callback
     dp.add_handler(CallbackQueryHandler(menu_callback))
-
-    # unknown
     dp.add_handler(MessageHandler(Filters.command, unknown))
 
     log.info("MuDaSiR Bot started (polling)")
-    updater.start_polling()
-    updater.idle()
+    try:
+        updater.start_polling()
+        updater.idle()
+    except Exception as e:
+        log.exception("Polling stopped: %s", e)
 
 if __name__ == "__main__":
     main()
