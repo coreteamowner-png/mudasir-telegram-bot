@@ -21,6 +21,48 @@ ALL_PATH = "/index.php?opt=shw_all_v2"
 TODAY_PATH = "/index.php?opt=shw_sts_today"
 
 HEADERS = {
+
+# ---- helper: safe reply function (use instead of update.message.reply_text) ----
+def send_reply(update, context, text, **kwargs):
+    """
+    Safely send a reply using available message/ callback_query.
+    Falls back to context.bot.send_message using LOG_CHAT_ID if needed.
+    """
+    # prefer update.message
+    try:
+        if getattr(update, "message", None) is not None:
+            return send_reply(update, context,text, **kwargs)
+    except Exception:
+        pass
+    # callback query message
+    try:
+        if getattr(update, "callback_query", None) is not None and update.callback_query.message is not None:
+            return update.callback_query.message.reply_text(text, **kwargs)
+    except Exception:
+        pass
+    # effective_message
+    try:
+        em = getattr(update, "effective_message", None)
+        if em is not None:
+            return em.reply_text(text, **kwargs)
+    except Exception:
+        pass
+    # fallback: try to send to LOG_CHAT_ID env var if set, else raise
+    try:
+        chat = os.getenv("LOG_CHAT_ID")
+        if chat:
+            return context.bot.send_message(chat_id=chat, text=text, **kwargs)
+    except Exception:
+        pass
+    # last-resort: try updater.bot? (best effort)
+    try:
+        return context.bot.send_message(text=text, chat_id=getattr(update, 'effective_chat', None))
+    except Exception:
+        # give up silently to avoid crash
+        return None
+
+# ---- end helper ----
+
     "User-Agent": "MuDaSiRBot/1.0",
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": UPSTREAM_BASE,
@@ -116,7 +158,7 @@ def start(update: Update, context: CallbackContext):
     txt = ("*Welcome to MuDaSiR VIP Allocator*\n\n"
            "Use the menu below or /clients /today /history /allocate\n\n"
            "— *Love ❤ from MuDaSiR*")
-    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
+    send_reply(update, context,brand(txt), parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
 
 def help_cmd(update: Update, context: CallbackContext):
     txt = ("*Commands*\n"
@@ -125,66 +167,66 @@ def help_cmd(update: Update, context: CallbackContext):
            "/allocate <client_id> <selrng> <qty> - allocate\n"
            "/today - today stats\n"
            "Upload CSV (client_external_id,selrng,quantity) for bulk run\n")
-    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN)
+    send_reply(update, context,brand(txt), parse_mode=ParseMode.MARKDOWN)
 
 def clients_cmd(update: Update, context: CallbackContext):
     s = get_session()
     try:
         r = s.get(UPSTREAM_BASE + ALL_PATH, headers=HEADERS, timeout=20)
     except Exception as e:
-        update.message.reply_text("⚠️ Network error: " + str(e)); return
+        send_reply(update, context,"⚠️ Network error: " + str(e)); return
     if looks_like_html(r.text) and "login" in r.text.lower():
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
+        send_reply(update, context,"⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     try:
         cl = extract_clients(r.text)
         if not cl:
-            update.message.reply_text("No clients found.")
+            send_reply(update, context,"No clients found.")
             return
         msg = "*Clients*\n\n"
         for c in cl:
             msg += f"• *{c['name']}* — `{c['external_id']}`\n"
-        update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
+        send_reply(update, context,brand(msg), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        update.message.reply_text("Parse error: " + str(e))
+        send_reply(update, context,"Parse error: " + str(e))
 
 def ranges_cmd(update: Update, context: CallbackContext):
     args = context.args
     if not args:
-        update.message.reply_text("Usage: /ranges <client_external_id>"); return
+        send_reply(update, context,"Usage: /ranges <client_external_id>"); return
     cid = args[0]
     s = get_session()
     try:
         r = s.post(UPSTREAM_BASE + ALL_PATH, data={"selidd": cid, "selected2":"1"}, headers=HEADERS, timeout=20)
     except Exception as e:
-        update.message.reply_text("Network error: " + str(e)); return
+        send_reply(update, context,"Network error: " + str(e)); return
     if looks_like_html(r.text) and "login" in r.text.lower():
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
+        send_reply(update, context,"⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     rows = parse_ranges(r.text)
     if not rows:
-        update.message.reply_text("No ranges found.")
+        send_reply(update, context,"No ranges found.")
         return
     msg = f"*Ranges for {cid}*\n\n"
     for rrr in rows:
         sel = rrr['selrng'] or "(no selrng)"
         msg += f"• *{rrr['text']}* — `{sel}`\n"
-    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
+    send_reply(update, context,brand(msg), parse_mode=ParseMode.MARKDOWN)
 
 def allocate_cmd(update: Update, context: CallbackContext):
     args = context.args
     if len(args) < 3:
-        update.message.reply_text("Usage: /allocate <client_id> <selrng> <qty>"); return
+        send_reply(update, context,"Usage: /allocate <client_id> <selrng> <qty>"); return
     selidd, selrng, qtys = args[0], args[1], args[2]
     try:
         qty = int(qtys)
     except:
-        update.message.reply_text("Quantity must be integer"); return
+        send_reply(update, context,"Quantity must be integer"); return
     s = get_session()
     try:
         r = s.post(UPSTREAM_BASE + ALL_PATH, data={"quantity":str(qty),"selidd":selidd,"selrng":selrng,"allocate":"1"}, headers=HEADERS, timeout=30)
     except Exception as e:
-        update.message.reply_text("Network error: "+str(e)); return
+        send_reply(update, context,"Network error: "+str(e)); return
     if looks_like_html(r.text):
-        update.message.reply_text("⚠️ Upstream returned HTML (login required or error). Check LOGIN_FORM_RAW."); 
+        send_reply(update, context,"⚠️ Upstream returned HTML (login required or error). Check LOGIN_FORM_RAW."); 
         save_history(selidd, selrng, qty, "failed_html")
         return
     status = "success" if r.status_code==200 else f"failed_http_{r.status_code}"
@@ -193,20 +235,20 @@ def allocate_cmd(update: Update, context: CallbackContext):
         txt = (f"✅ *Numbers Allocated Successful*\n\nClient: `{selidd}`\nRange: `{selrng}`\nQty: *{qty}*\n\n— *Love ❤ from MuDaSiR*")
     else:
         txt = f"❌ Failed: HTTP {r.status_code}"
-    update.message.reply_text(brand(txt), parse_mode=ParseMode.MARKDOWN)
+    send_reply(update, context,brand(txt), parse_mode=ParseMode.MARKDOWN)
 
 def today_cmd(update: Update, context: CallbackContext):
     s = get_session()
     try:
         r = s.get(UPSTREAM_BASE + TODAY_PATH, headers=HEADERS, timeout=20)
     except Exception as e:
-        update.message.reply_text("Network error: " + str(e)); return
+        send_reply(update, context,"Network error: " + str(e)); return
     if looks_like_html(r.text):
-        update.message.reply_text("⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
+        send_reply(update, context,"⚠️ Upstream returned HTML (login required). Check LOGIN_FORM_RAW."); return
     soup = BeautifulSoup(r.text, "lxml")
     tbl = soup.find("table")
     if not tbl:
-        update.message.reply_text("No stats table found."); return
+        send_reply(update, context,"No stats table found."); return
     counts = {}
     for tr in tbl.select("tr"):
         tds = tr.find_all("td")
@@ -221,27 +263,27 @@ def today_cmd(update: Update, context: CallbackContext):
     msg = "*Today stats*\n\n"
     for k,v in counts.items():
         msg += f"• *{k}* — TBP: `{v[0]}`  NTB: `{v[1]}`\n"
-    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
+    send_reply(update, context,brand(msg), parse_mode=ParseMode.MARKDOWN)
 
 def history_cmd(update: Update, context: CallbackContext):
     rows = cur.execute("SELECT client_external_id,range_code,quantity,status,created_at FROM history ORDER BY id DESC LIMIT 50").fetchall()
     if not rows:
-        update.message.reply_text("No history yet."); return
+        send_reply(update, context,"No history yet."); return
     msg = "*Allocation History (last 50)*\n\n"
     for r in rows:
         msg += f"{r[4]} — `{r[0]}` — {r[1]} — {r[2]} — {r[3]}\n"
-    update.message.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
+    send_reply(update, context,brand(msg), parse_mode=ParseMode.MARKDOWN)
 
 def handle_document(update: Update, context: CallbackContext):
     doc = update.message.document
     if not doc:
-        update.message.reply_text("Send a CSV file (client_external_id,selrng,quantity)."); return
+        send_reply(update, context,"Send a CSV file (client_external_id,selrng,quantity)."); return
     if not doc.file_name.lower().endswith(".csv"):
-        update.message.reply_text("Please upload a .csv file."); return
+        send_reply(update, context,"Please upload a .csv file."); return
     f = doc.get_file()
     fname = "/tmp/" + doc.file_name
     f.download(custom_path=fname)
-    update.message.reply_text("CSV downloaded, processing...")
+    send_reply(update, context,"CSV downloaded, processing...")
     processed = success = failed = 0
     with open(fname, "r", encoding="utf-8") as fh:
         for ln in fh:
@@ -270,7 +312,7 @@ def handle_document(update: Update, context: CallbackContext):
             except Exception as e:
                 failed += 1
             sleep(0.25)
-    update.message.reply_text(f"CSV processed: total={processed}, success={success}, failed={failed}")
+    send_reply(update, context,f"CSV processed: total={processed}, success={success}, failed={failed}")
 
 def menu_callback(update: Update, context: CallbackContext):
     q = update.callback_query
@@ -293,7 +335,7 @@ def menu_callback(update: Update, context: CallbackContext):
         q.message.reply_text("Unknown menu action.")
 
 def unknown(update: Update, context: CallbackContext):
-    update.message.reply_text("Unknown command. Use /help or the menu.")
+    send_reply(update, context,"Unknown command. Use /help or the menu.")
 
 def main():
     log.info("Starting MuDaSiR Bot...")
