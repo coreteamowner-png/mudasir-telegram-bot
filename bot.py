@@ -373,15 +373,25 @@ def menu_callback(update: Update, context: CallbackContext):
     q.message.answer("Unknown action.")
 
 # ---------------- allocate logic ----------------
+
+# ---------------- allocate logic ----------------
 def perform_multi_allocate(chat_id, context, message_obj, qty):
     sel = selections.get(chat_id)
     if not sel:
-        message_obj.edit_text("No selections found.")
+        try:
+            message_obj.edit_text("No selections found.")
+        except Exception:
+            try: message_obj.reply_text("No selections found.")
+            except: pass
         return
     clients = list(sel.get("clients", []))
     ranges = list(sel.get("ranges", []))
     if not clients or not ranges:
-        message_obj.edit_text("No clients or ranges selected.")
+        try:
+            message_obj.edit_text("No clients or ranges selected.")
+        except Exception:
+            try: message_obj.reply_text("No clients or ranges selected.")
+            except: pass
         return
 
     s = get_session()
@@ -397,24 +407,37 @@ def perform_multi_allocate(chat_id, context, message_obj, qty):
                 else:
                     status = f"failed_http_{res.status_code}"
             except Exception as e:
+                import logging
+                logging.exception("allocate error for %s %s", c, rcode)
                 status = "error"
             save_history(chat_id, c, rcode, qty, status)
             results.append((c, rcode, status))
-            time.sleep(0.2)
-    # prepare message and edit original (same message)
-    msg = "*Allocation Results*\n\n"
-    succ = 0
-    for r in results:
-        emoji = "✅" if r[2]=="success" else "❌"
-        if r[2]=="success": succ += 1
-        msg += f"{emoji} `{r[0]}` — `{r[1]}` => {r[2]}\n"
-    msg += f"\nTotal operations: {len(results)}  Successful: {succ}\n\n— *Love ❤ from MuDaSiR*"
-    try:
-        message_obj.edit_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        # fallback send
-        message_obj.reply_text(brand(msg), parse_mode=ParseMode.MARKDOWN)
+            import time; time.sleep(0.2)
 
+    # prepare safe plain-text message (no markdown)
+    lines = []
+    succ = 0
+    for c, rcode, status in results:
+        emoji = "✅" if status == "success" else "❌"
+        if status == "success": succ += 1
+        c_safe = str(c)
+        r_safe = str(rcode)
+        lines.append(f"{emoji} {c_safe}  —  {r_safe}  =>  {status}")
+
+    lines.append(f"Total operations: {len(results)}  Successful: {succ}")
+    lines.append("— Love ❤ from MuDaSiR")
+
+    final_msg = "\\n".join(lines)
+
+    try:
+        message_obj.edit_text(final_msg)
+    except Exception:
+        try:
+            message_obj.reply_text(final_msg)
+        except Exception:
+            log_chat = __import__('os').environ.get('LOG_CHAT_ID')
+            if log_chat:
+                context.bot.send_message(chat_id=log_chat, text="Allocation results:\\n" + final_msg)
 # ---------------- message handler for custom qty and documents ----------------
 def message_handler(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
